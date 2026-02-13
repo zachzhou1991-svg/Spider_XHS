@@ -63,6 +63,7 @@ def handle_user_info(data, user_id):
     }
 
 def handle_note_info(data):
+    print("Handling note info..." + str(data))
     note_id = data['id']
     note_url = data['url']
     note_type = data['note_card']['type']
@@ -190,6 +191,124 @@ def save_to_xlsx(datas, file_path, type='note'):
         ws.append(list(data.values()))
     wb.save(file_path)
     logger.info(f'数据保存至 {file_path}')
+
+def save_processed_note_list_to_xlsx(processed_note_list, file_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    headers = [
+        '笔记url', '笔记类型', '标题', '描述', '视频地址url', '图片地址url列表',
+        # 细粒度提取结果字段
+        '提取成功', '球场名称', '全量地址', '省', '市', '县/区', '路', '全天免费', '部分时间免费', '免费开始时间', '免费结束时间', '价格',
+        '需预约', '预约方式', '全场数量', '半场数量', '有灯光', '开门时间', '关门时间', '24小时开放', '场地材质',
+        '室内', '有停车场', '有免费停车场', '停车场名称', '停车场地址', '停车场免费', '其他描述'
+    ]
+    ws.append(headers)
+
+    header_idx = {h: i for i, h in enumerate(headers)}
+    key_to_row = {}
+
+    def parse_merge_value(val):
+        result = {}
+        for part in val.split(','):
+            part = part.strip()
+            if not part:
+                continue
+            if '(' in part and part.endswith(')'):
+                name, cnt = part.rsplit('(', 1)
+                name = name.strip()
+                cnt = cnt[:-1]
+                try:
+                    cnt = int(cnt)
+                except Exception:
+                    cnt = 1
+                result[name] = cnt
+            else:
+                result[part] = 1
+        return result
+
+    def merge_field(old_val, new_val):
+        old_val = old_val.strip()
+        new_val = new_val.strip()
+        if not old_val and not new_val:
+            return ''
+        if not old_val:
+            return new_val
+        if not new_val:
+            return old_val
+        old_dict = parse_merge_value(old_val)
+        new_dict = parse_merge_value(new_val)
+        for k in new_dict:
+            if k in old_dict:
+                old_dict[k] += new_dict[k]
+            else:
+                old_dict[k] = new_dict[k]
+        return ', '.join([f"{k}({v})" for k, v in old_dict.items()])
+
+    for item in processed_note_list:
+        price_info = item.get('priceInfo', {}) if isinstance(item.get('priceInfo', {}), dict) else {}
+        reserve_info = item.get('reserveInfo', {}) if isinstance(item.get('reserveInfo', {}), dict) else {}
+        parking_info = item.get('parkingInfo', {}) if isinstance(item.get('parkingInfo', {}), dict) else {}
+
+        row = [
+            norm_text(str(item.get('note_url', ''))),
+            norm_text(str(item.get('note_type', ''))),
+            norm_text(str(item.get('note_title', ''))),
+            norm_text(str(item.get('note_desc', ''))),
+            norm_text(str(item.get('video_url', ''))),
+            norm_text(str(item.get('image_urls', '')))
+        ]
+        row.extend([
+            norm_text(str(item.get('success', ''))),
+            norm_text(str(item.get('name', ''))),
+            norm_text(str(item.get('address', ''))),
+            norm_text(str(item.get('province', ''))),
+            norm_text(str(item.get('city', ''))),
+            norm_text(str(item.get('state', ''))),
+            norm_text(str(item.get('street', ''))),
+            norm_text(str(price_info.get('isFree', ''))),
+            norm_text(str(price_info.get('isHalfFree', ''))),
+            norm_text(str(price_info.get('freeTimeStart', ''))),
+            norm_text(str(price_info.get('freeTimeEnd', ''))),
+            norm_text(str(price_info.get('price', ''))),
+            norm_text(str(reserve_info.get('reservationRequired', ''))),
+            norm_text(str(reserve_info.get('reservationMethod', ''))),
+            norm_text(str(item.get('venueCount', ''))),
+            norm_text(str(item.get('halfVenueCount', ''))),
+            norm_text(str(item.get('hasLight', ''))),
+            norm_text(str(item.get('openedTime', ''))),
+            norm_text(str(item.get('closedTime', ''))),
+            norm_text(str(item.get('is24HOpen', ''))),
+            norm_text(str(item.get('surfaceMaterial', ''))),
+            norm_text(str(item.get('isIndoor', ''))),
+            norm_text(str(item.get('hasParking', ''))),
+            norm_text(str(item.get('hasFreeParking', ''))),
+            norm_text(str(parking_info.get('name', ''))),
+            norm_text(str(parking_info.get('detailAddress', ''))),
+            norm_text(str(parking_info.get('isFree', ''))),
+            norm_text(str(item.get('description', '')))
+        ])
+
+        # 主键：省、市、县/区、球场名称
+        key = (
+            row[header_idx['省']],
+            row[header_idx['市']],
+            row[header_idx['县/区']],
+            row[header_idx['球场名称']]
+        )
+
+        if key in key_to_row:
+            exist_row_idx = key_to_row[key]
+            for col in range(len(row)):
+                old_val = ws.cell(row=exist_row_idx, column=col + 1).value or ''
+                new_val = row[col] or ''
+                merged_val = merge_field(str(old_val), str(new_val))
+                ws.cell(row=exist_row_idx, column=col + 1, value=merged_val)
+        else:
+            ws.append(row)
+            key_to_row[key] = ws.max_row
+
+    wb.save(file_path)
+    logger.info(f'处理后数据保存至 {file_path}')
 
 def download_media(path, name, url, type):
     if type == 'image':
